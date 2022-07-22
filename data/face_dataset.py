@@ -14,6 +14,7 @@ import torch
 from data.base_dataset import BaseDataset, get_params, get_transform, normalize
 from data.image_folder import make_dataset
 from PIL import Image
+import torchvision.transforms as transforms
 
 
 def default_flist_reader(flist):
@@ -37,6 +38,11 @@ class FaceDataset(BaseDataset):
 
         self.file_paths = default_flist_reader(opt.flist)
 
+        transform_list = [transforms.ToTensor()]
+        self.to_tensor_transform = transforms.Compose(transform_list)
+
+        self.to_PIL_transform = transforms.ToPILImage()
+
     def __getitem__(self, index):
         ## load the GT face image
         file_path = self.file_paths[index]
@@ -48,27 +54,29 @@ class FaceDataset(BaseDataset):
 
         ## read the face image
         gt_face_img = Image.open(face_img_path).convert('RGB')
+        gt_face_img_tensor = self.to_tensor_transform(gt_face_img)
         
-        params = get_params(self.opt, gt_face_img.size)
-        transforms = get_transform(self.opt, params, normalize=True)
-
-        gt_face_img_tensor = transforms(gt_face_img)
-
         ## read the mask image
         msk_path = osp.join(self.data_root, video_name, "lower_mask", file_name + ".png")
         msk_img = Image.open(msk_path).convert('RGB')
-        mask_img_tensor = transforms(msk_img)
+        mask_img_tensor = self.to_tensor_transform(msk_img)
 
         ## get the masked face image
-        masked_face_img_tensor = gt_face_img_tensor * mask_img_tensor # (3, H, W)
+        noise = torch.rand_like(gt_face_img_tensor) * mask_img_tensor
+        masked_face_img_tensor = gt_face_img_tensor * (1.0 - mask_img_tensor) + noise # (3, H, W)
 
         ## Get the 3DMM rendered face image
         rendered_face_img_path = osp.join(self.data_root, video_name, "deep3dface_512", file_name + ".png")
-        
         rendered_face_img = Image.open(rendered_face_img_path).convert('RGB')
-        rendered_face_img_tensor = transforms(rendered_face_img)
 
+        params = get_params(self.opt, gt_face_img.size)
+        transforms = get_transform(self.opt, params, normalize=True)
+
+        masked_face_img_tensor = transforms(self.to_PIL_transform(masked_face_img_tensor))
+        rendered_face_img_tensor = transforms(rendered_face_img)
         input_img = torch.cat((masked_face_img_tensor, rendered_face_img_tensor), dim=0) # (6, H, W)
+
+        gt_face_img_tensor = transforms(self.to_PIL_transform(gt_face_img_tensor))
 
         input_dict = {'label': input_img,
                       'inst': 0,
