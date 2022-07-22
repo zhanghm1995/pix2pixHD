@@ -1,4 +1,5 @@
 debug*
+__pycache__
 checkpoints
 checkpoints/
 results/

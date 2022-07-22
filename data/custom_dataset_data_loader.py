@@ -4,8 +4,12 @@ from data.base_data_loader import BaseDataLoader
 
 def CreateDataset(opt):
     dataset = None
-    from data.aligned_dataset import AlignedDataset
-    dataset = AlignedDataset()
+    if opt.dataset_name == "AlignedDataset":
+        from data.aligned_dataset import AlignedDataset
+        dataset = AlignedDataset()
+    elif opt.dataset_name == "FaceDataset":
+        from data.face_dataset import FaceDataset
+        dataset = FaceDataset()
 
     print("dataset [%s] was created" % (dataset.name()))
     dataset.initialize(opt)
