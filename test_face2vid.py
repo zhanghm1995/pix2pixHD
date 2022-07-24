@@ -79,4 +79,5 @@ for i, data in tqdm(enumerate(dataset)):
 
 ## Create the video
 print("Start creating the video...")
-create_video_with_image_folder(img_save_dir, video_fps=25, output_dir=results_dir)
+create_video_with_image_folder(img_save_dir, video_fps=25, output_dir=results_dir,
+                               audio_path=opt.audio_path)
