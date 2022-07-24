@@ -132,6 +132,8 @@ class Visualizer():
         webpage.add_images(ims, txts, links, width=self.win_size)
     
     def save_images(self, save_dir, visuals, image_path):
+        os.makedirs(save_dir, exist_ok=True)
+        
         name = osp.splitext(osp.basename(image_path[0]))[0]
 
         for label, image_numpy in visuals.items():

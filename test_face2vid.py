@@ -15,8 +15,10 @@ from data.data_loader import CreateDataLoader
 from models.models import create_model
 import util.util as util
 from util.visualizer import Visualizer
-from util import html
+from util.save_video import create_video_with_image_folder
 import torch
+from tqdm import tqdm
+
 
 opt = TestOptions().parse(save=False)
 opt.nThreads = 1   # test code only supports nThreads = 1
@@ -29,7 +31,6 @@ dataset = data_loader.load_data()
 visualizer = Visualizer(opt)
 # create website
 results_dir = os.path.join(opt.results_dir, opt.name, '%s_%s' % (opt.phase, opt.which_epoch))
-os.makedirs(results_dir, exist_ok=True)
 
 # test
 if not opt.engine and not opt.onnx:
@@ -43,8 +44,10 @@ if not opt.engine and not opt.onnx:
         print(model)
 else:
     from run_engine import run_trt_engine, run_onnx
-    
-for i, data in enumerate(dataset):
+
+img_save_dir = os.path.join(results_dir, 'images')
+
+for i, data in tqdm(enumerate(dataset)):
     if i >= opt.how_many:
         break
     if opt.data_type == 16:
@@ -67,8 +70,13 @@ for i, data in enumerate(dataset):
     else:        
         generated = model.inference(data['label'], data['inst'], data['image'])
         
-    visuals = OrderedDict([('input_label', util.tensor2label(data['label'][0], opt.label_nc)),
-                           ('synthesized_image', util.tensor2im(generated.data[0]))])
+    # visuals = OrderedDict([('input_label', util.tensor2label(data['label'][0], opt.label_nc)),
+    #                        ('synthesized_image', util.tensor2im(generated.data[0]))])
+    visuals = OrderedDict([('synthesized_image', util.tensor2im(generated.data[0]))])
     img_path = data['path']
-    print('process image... %s' % img_path)
-    visualizer.save_images(save_dir=results_dir, visuals=visuals, image_path=img_path)
+    visualizer.save_images(save_dir=img_save_dir, visuals=visuals, image_path=img_path)
+
+
+## Create the video
+print("Start creating the video...")
+create_video_with_image_folder(img_save_dir, video_fps=25, output_dir=results_dir)
