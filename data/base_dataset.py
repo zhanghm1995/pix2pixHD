@@ -61,7 +61,11 @@ def normalize():
     return transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
 
 def __make_power_2(img, base, method=Image.BICUBIC):
-    ow, oh = img.size        
+    try:
+        ow, oh = img.size
+    except:
+        ow, oh = img.shape[:2]
+    
     h = int(round(oh / base) * base)
     w = int(round(ow / base) * base)
     if (h == oh) and (w == ow):

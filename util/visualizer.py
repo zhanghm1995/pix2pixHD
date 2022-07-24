@@ -1,5 +1,6 @@
 import numpy as np
 import os
+import os.path as osp
 import ntpath
 import time
 from . import util
@@ -129,3 +130,11 @@ class Visualizer():
             txts.append(label)
             links.append(image_name)
         webpage.add_images(ims, txts, links, width=self.win_size)
+    
+    def save_images(self, save_dir, visuals, image_path):
+        name = osp.splitext(osp.basename(image_path[0]))[0]
+
+        for label, image_numpy in visuals.items():
+            image_name = f"{name}_{label}.jpg"
+            save_path = os.path.join(save_dir, image_name)
+            util.save_image(image_numpy, save_path)
