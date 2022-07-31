@@ -10,6 +10,7 @@ pix2pixHD model
 
 import os
 import os.path as osp
+from glob import glob
 import torch
 import numpy as np
 from data.base_dataset import BaseDataset, get_params, get_transform, normalize
@@ -34,13 +35,47 @@ def default_flist_reader(flist):
     return imlist
 
 
+IMG_EXTENSIONS = [
+    '.jpg', '.JPG', '.jpeg', '.JPEG',
+    '.png', '.PNG', '.ppm', '.PPM', '.bmp', '.BMP', '.tiff'
+]
+
+
+def is_image_file(filename):
+    """Check a file name is an image file or not.
+
+    Args:
+        filename (str|Path): The file name with extension.
+
+    Returns:
+        Bool: True if the file is an image file.
+    """
+    return any(filename.endswith(extension) for extension in IMG_EXTENSIONS)
+
+
 class FaceDataset(BaseDataset):
     
     def initialize(self, opt):
         self.opt = opt
         self.data_root = opt.dataroot
 
-        self.file_paths = default_flist_reader(opt.flist)
+        self.is_infer = False
+
+        if osp.exists(opt.flist):
+            self.file_paths = default_flist_reader(opt.flist)
+        else:
+            # The inference stage, we use the generated 3DMM rendered face
+            # opt.flist is a video name in this case
+            self.is_infer = True
+
+            self.input_rendered_face_paths = sorted(glob(osp.join(opt.input_rendered_face, "*.png")))
+
+            img_folder = osp.join(self.data_root, opt.flist, "face_image")
+            image_list = sorted([osp.splitext(img_file)[0] \
+                                for img_file in os.listdir(img_folder) if is_image_file(img_file)])
+            
+            self.file_paths = [osp.join(opt.flist, "face_image", f) for f in image_list]
+            self.file_paths = self.file_paths[:len(self.input_rendered_face_paths)]
 
         transform_list = [transforms.ToTensor()]
         self.to_tensor_transform = transforms.Compose(transform_list)
@@ -53,6 +88,62 @@ class FaceDataset(BaseDataset):
 
         self.noise = torch.rand((3, 256, 256))
 
+    def __getitem__(self, index):
+        if self.align_face:
+            return self.read_aligned_face(index)
+
+        ## load the GT face image
+        file_path = self.file_paths[index]
+
+        face_img_path = osp.join(self.data_root, file_path + ".jpg")
+
+        img_dir, file_name = osp.split(file_path)
+        video_name = osp.dirname(img_dir)
+
+        ## read the face image
+        gt_face_img = Image.open(face_img_path).convert('RGB')
+        gt_face_img_tensor = self.to_tensor_transform(gt_face_img)
+        
+        ## read the mask image
+        msk_path = osp.join(self.data_root, video_name, "lower_neck_mask", file_name + ".png")
+        msk_img = Image.open(msk_path).convert('RGB')
+        mask_img_tensor = self.to_tensor_transform(msk_img)
+
+        ## get the masked face image
+        # noise = torch.rand_like(gt_face_img_tensor) * mask_img_tensor
+        masked_face_img_tensor = gt_face_img_tensor * (1.0 - mask_img_tensor) # (3, H, W)
+
+        ## Get the 3DMM rendered face image
+        if not self.is_infer:
+            rendered_face_img_path = osp.join(self.data_root, video_name, "deep3dface_512", file_name + ".png")
+        else:
+            rendered_face_img_path = self.input_rendered_face_paths[index]
+        
+        rendered_face_img = Image.open(rendered_face_img_path).convert('RGB')
+
+        params = get_params(self.opt, gt_face_img.size)
+        transforms = get_transform(self.opt, params, normalize=True)
+
+        masked_face_img_tensor = transforms(self.to_PIL_transform(masked_face_img_tensor))
+        rendered_face_img_tensor = transforms(rendered_face_img)
+        input_img = torch.cat((masked_face_img_tensor, rendered_face_img_tensor), dim=0) # (6, H, W)
+
+        gt_face_img_tensor = transforms(self.to_PIL_transform(gt_face_img_tensor))
+
+        input_dict = {'label': input_img,
+                      'inst': 0,
+                      'feat': 0,
+                      'image': gt_face_img_tensor,
+                      'path': face_img_path}
+
+        return input_dict
+
+    def __len__(self):
+        return len(self.file_paths) // self.opt.batchSize * self.opt.batchSize
+
+    def name(self):
+        return 'FaceDataset'
+    
     def read_aligned_face(self, index):
         ## load the GT face image
         file_path = self.file_paths[index]
@@ -77,7 +168,7 @@ class FaceDataset(BaseDataset):
         img_tensor = self.to_tensor_transform(img) # to [0, 1]
 
         ### -------- Load the mask image
-        msk_path = osp.join(abs_video_dir, "lower_mask", file_name + ".png")
+        msk_path = osp.join(abs_video_dir, "lower_neck_mask", file_name + ".png")
         msk_img = Image.open(msk_path).convert('RGB')
 
         msk_img = cv2.warpAffine(np.array(msk_img), mat, (256, 256), borderValue=(0,0,0))
@@ -110,56 +201,3 @@ class FaceDataset(BaseDataset):
                       'path': face_img_path}
 
         return input_dict
-
-
-    def __getitem__(self, index):
-        if self.align_face:
-            return self.read_aligned_face(index)
-
-        ## load the GT face image
-        file_path = self.file_paths[index]
-
-        face_img_path = osp.join(self.data_root, file_path + ".jpg")
-
-        img_dir, file_name = osp.split(file_path)
-        video_name = osp.dirname(img_dir)
-
-        ## read the face image
-        gt_face_img = Image.open(face_img_path).convert('RGB')
-        gt_face_img_tensor = self.to_tensor_transform(gt_face_img)
-        
-        ## read the mask image
-        msk_path = osp.join(self.data_root, video_name, "lower_mask", file_name + ".png")
-        msk_img = Image.open(msk_path).convert('RGB')
-        mask_img_tensor = self.to_tensor_transform(msk_img)
-
-        ## get the masked face image
-        # noise = torch.rand_like(gt_face_img_tensor) * mask_img_tensor
-        masked_face_img_tensor = gt_face_img_tensor * (1.0 - mask_img_tensor) # (3, H, W)
-
-        ## Get the 3DMM rendered face image
-        rendered_face_img_path = osp.join(self.data_root, video_name, "deep3dface_512", file_name + ".png")
-        rendered_face_img = Image.open(rendered_face_img_path).convert('RGB')
-
-        params = get_params(self.opt, gt_face_img.size)
-        transforms = get_transform(self.opt, params, normalize=True)
-
-        masked_face_img_tensor = transforms(self.to_PIL_transform(masked_face_img_tensor))
-        rendered_face_img_tensor = transforms(rendered_face_img)
-        input_img = torch.cat((masked_face_img_tensor, rendered_face_img_tensor), dim=0) # (6, H, W)
-
-        gt_face_img_tensor = transforms(self.to_PIL_transform(gt_face_img_tensor))
-
-        input_dict = {'label': input_img,
-                      'inst': 0,
-                      'feat': 0,
-                      'image': gt_face_img_tensor,
-                      'path': face_img_path}
-
-        return input_dict
-
-    def __len__(self):
-        return len(self.file_paths) // self.opt.batchSize * self.opt.batchSize
-
-    def name(self):
-        return 'FaceDataset'

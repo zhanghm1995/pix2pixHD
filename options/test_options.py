@@ -15,4 +15,5 @@ class TestOptions(BaseOptions):
         self.parser.add_argument("--engine", type=str, help="run serialized TRT engine")
         self.parser.add_argument("--onnx", type=str, help="run ONNX model via TRT")
         self.parser.add_argument("--audio_path", type=str, default=None, help="audio path")
+        self.parser.add_argument("--input_rendered_face", type=str, default=None, help="The rendered face images")
         self.isTrain = False
