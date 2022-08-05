@@ -17,22 +17,12 @@ from data.base_dataset import BaseDataset, get_params, get_transform, normalize
 from data.image_folder import make_dataset
 import PIL
 from PIL import Image
+import random
 import cv2
+from collections import defaultdict
 import torchvision.transforms as transforms
 from util.preprocess import DataProcessor
-
-
-def default_flist_reader(flist):
-    """
-    flist format: impath label\nimpath label\n ...(same to caffe's filelist)
-    """
-    imlist = []
-    with open(flist, 'r') as rf:
-        for line in rf.readlines():
-            impath = line.strip()
-            imlist.append(impath)
-
-    return imlist
+from .face_utils import get_masked_region
 
 
 IMG_EXTENSIONS = [
@@ -62,7 +52,12 @@ class FaceDataset(BaseDataset):
         self.is_infer = False
 
         if osp.exists(opt.flist):
-            self.file_paths = default_flist_reader(opt.flist)
+            self.file_paths = open(opt.flist).read().splitlines()
+
+            self.video_name_to_imgs_list_dict = defaultdict(list)
+            for line in self.file_paths:
+                name = line.split('/')[0]
+                self.video_name_to_imgs_list_dict[name].append(line)
         else:
             # The inference stage, we use the generated 3DMM rendered face
             # opt.flist is a video name in this case
@@ -86,11 +81,16 @@ class FaceDataset(BaseDataset):
 
         self.align_face = False
 
+        self.use_blended_face = opt.use_blended_face
+
         self.noise = torch.rand((3, 256, 256))
 
     def __getitem__(self, index):
         if self.align_face:
             return self.read_aligned_face(index)
+
+        if self.use_blended_face:
+            return self.read_blended_face(index)
 
         ## load the GT face image
         file_path = self.file_paths[index]
@@ -144,6 +144,60 @@ class FaceDataset(BaseDataset):
     def name(self):
         return 'FaceDataset'
     
+    def read_blended_face(self, index):
+        ## load the GT face image
+        file_path = self.file_paths[index]
+
+        face_img_path = osp.join(self.data_root, file_path + ".jpg")
+
+        img_dir, file_name = osp.split(file_path)
+        video_name = osp.dirname(img_dir)
+
+        ## read the face image
+        gt_face_img = cv2.imread(face_img_path)
+        gt_face_img_tensor = self.to_tensor_transform(gt_face_img)
+
+        ## Get the 3DMM rendered face image
+        if not self.is_infer:
+            rendered_face_img_path = osp.join(self.data_root, video_name, "deep3dface_512", file_name + ".png")
+        else:
+            rendered_face_img_path = self.input_rendered_face_paths[index]
+        
+        rendered_face_img = cv2.imread(rendered_face_img_path)
+        rendered_face_img_tensor = self.to_tensor_transform(rendered_face_img)
+
+        ## Get the binary mask image from the 3DMM rendered face image
+        rendered_face_mask_img = get_masked_region(rendered_face_img)[..., None]
+        rendered_face_mask_img_tensor = torch.FloatTensor(rendered_face_mask_img) / 255.0
+        rendered_face_mask_img_tensor = rendered_face_mask_img_tensor.permute(2, 0, 1) # (1, H, W)
+
+        blended_img_tensor = gt_face_img_tensor * (1 - rendered_face_mask_img_tensor) + \
+                             rendered_face_img_tensor * rendered_face_mask_img_tensor
+        blended_img_tensor = torch.flip(blended_img_tensor, dims=[0]) # to RGB
+
+        ## Read arbitrary reference image
+        curr_video_frames = self.video_name_to_imgs_list_dict[video_name]
+        ref_img_path = random.choice(curr_video_frames)
+
+        ref_face_img = Image.open(osp.join(self.data_root, ref_img_path + ".jpg")).convert("RGB")
+
+        params = get_params(self.opt, ref_face_img.size)
+        transforms = get_transform(self.opt, params, normalize=True)
+
+        blended_face_img_tensor = transforms(self.to_PIL_transform(blended_img_tensor))
+        ref_face_img_tensor = transforms(ref_face_img)
+        input_img = torch.cat((blended_face_img_tensor, ref_face_img_tensor), dim=0) # (6, H, W)
+
+        gt_face_img_tensor = transforms(self.to_PIL_transform(gt_face_img_tensor))
+
+        input_dict = {'label': input_img,
+                      'inst': 0,
+                      'feat': 0,
+                      'image': gt_face_img_tensor,
+                      'path': face_img_path}
+
+        return input_dict
+
     def read_aligned_face(self, index):
         ## load the GT face image
         file_path = self.file_paths[index]
